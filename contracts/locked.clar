@@ -1,5 +1,6 @@
 (define-constant TOKEN_CAP u1000000) ;; Maximum supply limit for any token
 (define-constant ADMIN_ADDRESS tx-sender) ;; Admin of the contract
+(define-constant MAX_LOCK_PERIOD u52560) ;; Maximum lock period (approximately 1 year in blocks)
 
 ;; Data structure to store token details
 (define-data-var token-metadata
@@ -24,6 +25,8 @@
 (define-constant ERR_INVALID_RECIPIENT u104)
 (define-constant ERR_TOKENS_LOCKED u105)
 (define-constant ERR_ALLOWANCE_EXCEEDED u106)
+(define-constant ERR_INVALID_LOCK_PERIOD u107)
+(define-constant ERR_INVALID_SPENDER u108)
 
 ;; Mint a new token with a custom supply, name, and symbol
 (define-public (create-token (title (string-ascii 32)) (ticker (string-ascii 10)) (amount uint))
@@ -84,12 +87,20 @@
         ;; Ensure amount is greater than zero
         (asserts! (> amount u0) (err ERR_INVALID_AMOUNT))
         
+        ;; Validate lock period - must be positive and not excessive
+        (asserts! (and (> lock-period u0) (<= lock-period MAX_LOCK_PERIOD)) (err ERR_INVALID_LOCK_PERIOD))
+        
         ;; Ensure the sender has enough balance
         (let ((sender-balance (default-to u0 (map-get? holdings tx-sender))))
             (asserts! (>= sender-balance amount) (err ERR_BALANCE_LOW))
             
-            ;; Calculate unlock height
-            (let ((unlock-at (+ block-height lock-period)))
+            ;; Calculate unlock height (safely)
+            (let ((current-block block-height)
+                  (unlock-at (+ block-height lock-period)))
+                
+                ;; Ensure unlock height calculation doesn't overflow
+                (asserts! (> unlock-at current-block) (err ERR_INVALID_LOCK_PERIOD))
+                
                 ;; Store lock information
                 (map-set token-locks 
                     { owner: tx-sender } 
@@ -107,6 +118,10 @@
         ;; Ensure amount is valid
         (asserts! (>= amount u0) (err ERR_INVALID_AMOUNT))
         
+        ;; Validate spender address
+        (asserts! (not (is-eq spender 'SP000000000000000000002Q6VF78)) (err ERR_INVALID_SPENDER))
+        (asserts! (not (is-eq spender tx-sender)) (err ERR_INVALID_SPENDER))
+        
         ;; Set allowance
         (map-set allowances { owner: tx-sender, spender: spender } amount)
         (ok true)
@@ -121,6 +136,9 @@
         
         ;; Ensure recipient is valid
         (asserts! (not (is-eq recipient 'SP000000000000000000002Q6VF78)) (err ERR_INVALID_RECIPIENT))
+        
+        ;; Ensure owner is valid
+        (asserts! (not (is-eq owner 'SP000000000000000000002Q6VF78)) (err ERR_INVALID_SPENDER))
         
         ;; Check allowance
         (let ((current-allowance (default-to u0 (map-get? allowances { owner: owner, spender: tx-sender }))))
